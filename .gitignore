@@ -1,0 +1,70 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# C / C++ / Embedded Build & Firmware Artifacts
+*.hex
+*.bin
+*.elf
+*.o
+*.obj
+*.a
+*.lib
+*.d
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+Makefile
+.pio/
+.pioenvs/
+.pio/build/
+.esphome/
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Distribution / Packaging
+dist/
+*.egg-info/
+.eggs/
+
+# Machine Learning & Large Weights / Datasets
+*.pth.tar
+*.ckpt
+*.h5
+# Keep essential demo models (uncomment if model tracking via Git LFS is preferred)
+# *.pth
+# *.onnx
+
+# Jupyter Notebook & Checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# IDE and Editor Configuration
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+
+# Logs & Temporary Files
+*.log
+*.tmp
+temp/
+scratch/
