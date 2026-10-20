@@ -17,6 +17,12 @@
 
 ---
 
+https://github.com/user-attachments/assets/d52ecca7-46ea-4fee-aaf0-7ba1b249b7fd
+
+https://github.com/user-attachments/assets/865c825c-d5cf-4131-b6b3-dddb59145daa
+
+
+
 ## 📌 Executive Overview
 
 The **ST-RobotArm** is a production-grade, vision-guided **6-DOF robotic manipulator** engineered for autonomous multi-class object detection, real-time semantic identification, spatial pose extraction, and closed-loop pick-and-place sorting.
