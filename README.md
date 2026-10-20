@@ -1,4 +1,4 @@
-# 🤖 Autonomous 6-DOF Robotic Manipulator with Edge AI Vision & Neural Kinematics
+# 🤖 On-Device Edge AI Robotic Manipulator with Real-Time Multi-Class Object Detection & Tracking
 
 ![Project Banner](assets/banner.png)
 
