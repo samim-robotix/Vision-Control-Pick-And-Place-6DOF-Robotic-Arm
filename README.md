@@ -19,128 +19,93 @@
 
 ## 📌 Executive Overview
 
-The **ST-RobotArm** is a high-performance, industrial-grade **6-DOF robotic manipulator** engineered for autonomous vision-guided object detection, semantic classification, real-time spatial pose estimation, and closed-loop pick-and-place sorting.
+The **ST-RobotArm** is a production-grade, vision-guided **6-DOF robotic manipulator** engineered for autonomous multi-class object detection, real-time semantic identification, spatial pose extraction, and closed-loop pick-and-place sorting.
 
-Driven by a **Raspberry Pi 5** paired with a **Hailo-8L AI Acceleration HAT (13 TOPS)** and an **ESP32 Serial Motor Driver**, this system bridges state-of-the-art Edge AI computer vision with robust embedded actuation. It incorporates a **dual-shoulder parallel torque architecture** powered by high-torque **Feetech / Waveshare ST3215** serial bus servos (12-bit magnetic encoders, 4096 steps/rev), analytical Denavit-Hartenberg (DH) forward kinematics, geometric closed-form inverse kinematics (IK), and a deep-learning neural network surrogate model trained for ultra-fast Cartesian-to-Joint trajectory generation.
+Driven by a **Raspberry Pi 5** paired with a **Hailo-8L AI Acceleration HAT (13 TOPS)** and an **ESP32 Serial Motor Driver**, this architecture unifies edge intelligence with high-torque industrial bus actuation. It features a **dual-shoulder parallel torque architecture** driven by high-torque **Feetech / Waveshare ST3215** serial bus servos (12-bit magnetic contactless absolute encoders, 4096 steps/rev), analytical Denavit-Hartenberg (DH) forward kinematics, geometric closed-form inverse kinematics (IK), and a lightweight neural surrogate model trained for sub-millisecond Cartesian-to-Joint trajectory generation.
 
 ---
 
 ## 🔄 End-to-End Autonomous Pick-and-Place Lifecycle
 
-The system executes a deterministic 6-stage autonomous manipulation pipeline:
+![Autonomous Manipulation Lifecycle](assets/manipulation_lifecycle.png)
 
-```
-┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                   AUTONOMOUS MANIPULATION LIFECYCLE                                    │
-├─────────────────┬──────────────────┬─────────────────┬─────────────────┬────────────────┬──────────────┤
-│ 1. PERCEPTION   │ 2. POSE & CLASS  │ 3. IK SOLVER    │ 4. PICK ROUTINE │ 5. DYNAMIC     │ 6. HOMING    │
-│    ACQUISITION  │    EXTRACTION    │    (GEO / ONNX) │    & LIFT       │    SORT & DROP │    RETURN    │
-├─────────────────┼──────────────────┼─────────────────┼─────────────────┼────────────────┼──────────────┤
-│ Overhead USB    │ Dynamic HSV /    │ Fast analytical │ Gripper opens;  │ Arm smoothly   │ Gripper      │
-│ Camera stream   │ ML segmentation  │ geometric or    │ arm drops to    │ interpolates   │ releases;    │
-│ captures        │ extracts $(x,y)$ │ ONNX surrogate  │ target $(x,y)$; │ to dedicated   │ arm returns  │
-│ workcell        │ centroid, angle  │ infers 5 joint  │ gripper locks   │ bin pose for   │ to resting   │
-│ active area     │ $\theta$, & class│ angles in <2ms  │ $(q_{17}=75)$;  │ that object    │ home pose    │
-│ (640x480 @30fps)│ ID (C1, C2, C3)  │                 │ lifts +25mm     │ class ID       │              │
-└─────────────────┴──────────────────┴─────────────────┴─────────────────┴────────────────┴──────────────┘
-```
+The system executes a deterministic closed-loop autonomous manipulation workflow:
 
-1. **Perception Acquisition**: High-speed USB web camera feeds RGB frames into the edge processing pipeline.
-2. **Detection, Classification & Pose Extraction**: Computes multi-class segmentation masks, determines contour boundaries, computes oriented minimum-area bounding boxes (`cv2.minAreaRect`), and extracts the object's centroid $(c_x, c_y)$, planar orientation angle $(\theta)$, and class category.
-3. **Real-Time Inverse Kinematics Solving**: Converts workpiece Cartesian coordinates $(x, y, z, \theta)$ into target motor joint angles $[q_{11}, q_{12}, q_{14}, q_{15}, q_{16}]$ using either:
-   - Analytical closed-form Geometric IK via Law of Cosines.
-   - Neural Network Edge Inference surrogate model (`ik_model_v2.onnx`).
-4. **Precision Grasp & Vertical Lift**: Opens end-effector ($q_{17}=0$), trajectories arm to workpiece grasp pose, engages gripper ($q_{17}=75$), and performs vertical shoulder lift to ensure collision-free clearance.
-5. **Class-Specific Routing & Placement**: The robot arm traverses to the pre-calibrated bin waypoint uniquely designated for that detected class/color (Bin 1, Bin 2, or Bin 3).
-6. **Object Drop & Return to Home**: Releases workpiece into receptacle, resets gripper, and returns to safe baseline Home Configuration (`robot_home.csv`).
+1. **Perception Acquisition**: Overhead USB camera activates and continuously acquires 640×480 RGB frames at 30 FPS across the workcell active zone.
+2. **Object Detection & Classification**: Real-time HSV segmentation / AI inference identifies target items and classifies them into distinct operational categories (Class 1, Class 2, Class 3).
+3. **Spatial Pose & Grasp Extraction**: The vision engine computes oriented minimum-area bounding boxes (`cv2.minAreaRect`), isolating centroid coordinates $(c_x, c_y)$ and planar orientation alignment angle $(\theta)$.
+4. **Inverse Kinematics Solution**: Target $(x, y, \theta)$ coordinates are translated into physical 5-axis joint angles $[q_{11}, q_{12}, q_{14}, q_{15}, q_{16}]$ via analytical Law of Cosines or the ONNX neural surrogate model in <1.5 ms.
+5. **Precision Pick & Clearance Lift**: Gripper opens ($q_{17}=0$), interpolates down to target workpiece pose, locks the gripper ($q_{17}=75$), and executes a vertical shoulder elevation (+25 mm) to guarantee collision-free travel.
+6. **Class-Specific Routing & Drop**: Manipulator routes directly to the designated receptacle assigned to that specific object class (Bin 1, Bin 2, or Bin 3), releases the jaw ($q_{17}=0$), and returns to baseline safe Homing configuration.
 
 ---
 
 ## 🏛️ System Architecture & Dataflow Pipeline
 
-```
-+--------------------------------------------------------------------------------------------------+
-|                                    HARDWARE & SENSING LAYER                                      |
-|                                                                                                  |
-|   +--------------------------+                         +-------------------------------------+   |
-|   |  Overhead USB HD Camera  |                         |  12V High-Current DC Power Supply   |   |
-|   |  (640x480 @ 30 FPS, RGB) |                         |  (Direct bus power for ST3215 bus)  |   |
-|   +------------+-------------+                         +------------------+------------------+   |
-+----------------|----------------------------------------------------------|----------------------+
-                 | V4L2 Video Stream                                        | 12V VCC Rail
-+----------------v----------------------------------------------------------v----------------------+
-|                           EDGE PROCESSING & COMPUTE ENGINE (Host: RPi 5)                         |
-|                                                                                                  |
-|   +---------------------------------------+      PCIe Gen 2/3   +----------------------------+   |
-|   | Raspberry Pi 5 (Quad-Core Cortex-A76) | <=================> | Hailo-8L AI HAT (13 TOPS)  |   |
-|   +-------------------+-------------------+                     +--------------+-------------+   |
-|                       |                                                        |                 |
-|                       |  ================ COMPUTER VISION PIPELINE ============|                 |
-|                       +-> [ 1. Frame Acquisition & Preprocessing (OpenCV) ]    |                 |
-|                       +-> [ 2. Color Segmentation / Object Detection       ] <-+                 |
-|                       +-> [ 3. Contour & MinAreaRect Extraction (X, Y, θ)  ]                     |
-|                       +-> [ 4. Object Identification & Multi-Class Routing ]                     |
-|                               |                                                                  |
-|                               v                                                                  |
-|   +------------------------------------------------------------------------------------------+   |
-|   |                              KINEMATICS & TRAJECTORY CORE                                |   |
-|   |   * Geometric Inverse Kinematics (Law of Cosines, Planar R-Z Trigonometry)               |   |
-|   |   * Denavit-Hartenberg (DH) Forward Kinematics 4x4 Homogeneous Transform Validation     |   |
-|   |   * Neural Network IK Surrogate Model (PyTorch / ONNX Runtime `ik_model_v2.onnx`)       |   |
-|   |   * Kinesthetic Lead-Through Teaching & CSV Waypoint Recording / Playback Engine        |   |
-|   +---------------------------------------------+--------------------------------------------+   |
-|                                                 | Joint Target Positions                         |
-|                                                 v                                                |
-|   +------------------------------------------------------------------------------------------+   |
-|   |                            SERIAL PACKET PROTOCOL ENCODER                                |   |
-|   |   * Half-Duplex ST3215 Frame Assembly: [0xFF, 0xFF, ID, Len, Instr, Addr, Data..., Cksm] |   |
-|   |   * Dual-Shoulder Inverted Angle Computation: ID 13 = 4096 - ID 12                       |   |
-|   +---------------------------------------------+--------------------------------------------+   |
-+-------------------------------------------------|------------------------------------------------+
-                                                  | USB-to-UART (115200 Baud, DTR/RTS Protected)
-+-------------------------------------------------v------------------------------------------------+
-|                             EMBEDDED CONTROLLER LAYER (ESP32)                                    |
-|                                                                                                  |
-|   +------------------------------------------------------------------------------------------+   |
-|   | ESP32 Serial Bus Servo Driver Bridge Board                                               |   |
-|   |   * Hardware UART0 <-> UART1 / Half-Duplex Direction Control Switching                   |   |
-|   |   * High-speed bi-directional packet passthrough & telemetry feedback parsing            |   |
-|   +---------------------------------------------+--------------------------------------------+   |
-+-------------------------------------------------|------------------------------------------------+
-                                                  | Single-Wire Half-Duplex TTL Servo Bus (1 Mbps)
-+-------------------------------------------------v------------------------------------------------+
-|                                6-DOF PHYSICAL ACTUATION LAYER                                    |
-|                                                                                                  |
-|   +------------------------------------------------------------------------------------------+   |
-|   | 7x Feetech / Waveshare ST3215 High-Torque Programmable Serial Bus Servos (12-bit Magnetic)|   |
-|   |                                                                                          |   |
-|   |   [ID 11] Base Yaw       : ±180° Waist Rotation                                          |   |
-|   |   [ID 12] Shoulder L     : Primary Elevation Joint                                       |   |
-|   |   [ID 13] Shoulder R     : Inverse-Coupled Parallel Elevation (Doubles Lift Torque)      |   |
-|   |   [ID 14] Elbow Pitch    : Mid-Arm Articulation                                          |   |
-|   |   [ID 15] Wrist Pitch    : Vertical End-Effector Pitch Alignment                         |   |
-|   |   [ID 16] Wrist Roll     : Axial Tool Center Point (TCP) Rotation                        |   |
-|   |   [ID 17] Gripper        : Parallel Jaw Grasping End-Effector                            |   |
-|   +------------------------------------------------------------------------------------------+   |
-+--------------------------------------------------------------------------------------------------+
-```
+![System Architecture & Hardware Dataflow](assets/system_architecture.png)
+
+The system is partitioned into four synchronized architectural tiers:
+
+* **Perception & Workcell Layer**: USB HD web camera streaming UVC video, accompanied by an isolated 12V 10A DC regulated power delivery unit.
+* **Edge Compute & AI Engine (Host SBC)**: Raspberry Pi 5 orchestrating the OpenCV vision pipeline, interacting with the Hailo-8L NPU over PCIe Gen 2/3 for neural acceleration, and computing real-time kinematic transforms.
+* **Embedded Controller Layer (ESP32)**: Asynchronous serial driver acting as a high-speed bridge between host USB CDC (115200 Baud) and single-wire half-duplex TTL bus (1 Mbps), with hardware DTR/RTS suppression to prevent MCU resets.
+* **6-DOF Actuation Layer**: 7x daisy-chained ST3215 serial bus servos delivering up to 30 kg·cm holding torque per joint with 12-bit magnetic encoder telemetry.
 
 ---
 
 ## ⚡ Core Engineering Features
 
-- **🚀 13 TOPS Edge AI Inference Acceleration**: Deploys vision models and neural inverse kinematics via the Raspberry Pi 5 and Hailo-8L M.2 AI HAT, reducing inference latencies to under 2 ms.
-- **🦾 Dual-Shoulder Parallel Torque Architecture**: Joint 2 (Shoulder) is driven by two mirrored ST3215 servos (IDs 12 and 13) coupled mechanically in parallel. The firmware applies complementary phase inversion (`ID13_steps = 4096 - ID12_steps`), doubling the shoulder payload capacity and preventing joint backlash under cantilever loads.
-- **📐 Dual Kinematics Engine**:
-  - **Analytical Geometric IK**: Closed-form mathematical solution utilizing planar Law of Cosines for boundary-checked, deterministic Cartesian-to-Joint mapping.
-  - **Data-Driven Neural Network IK**: ResNet and Multi-Layer Perceptron (MLP) networks trained on real physical poses (`train_onnx_v2.py`) exported to optimized ONNX computational graphs (`ik_model_v2.onnx`).
-- **🎯 Precision Computer Vision Pipeline**:
-  - Interactive Click-to-Teach HSV color calibration (`color_detect_rr.py`).
-  - Oriented bounding box extraction (`cv2.minAreaRect`) computing centroid $(x, y)$, width, height, and grasp alignment angle $(\theta)$.
-  - Multi-zone scan gates and multi-class dynamic bin sorting (Channels 1, 2, 3 $\rightarrow$ Bins 1, 2, 3).
-- **🎓 Kinesthetic Lead-Through Teaching Mode**: De-energizes servo holding torque dynamically (`rec_replay.py`), enabling an operator to physically hand-guide the 6-DOF arm through complex trajectories, capture waypoints, and replay them with fine-tuned motor speeds and inter-waypoint delays.
-- **✋ Contactless MediaPipe Gesture Teleoperation**: Integrated WebSocket client (`mec_ges.py`) tracking 21 3D hand landmarks via Google MediaPipe Hands to teleoperate the arm and robotic base over low-latency wireless networks.
-- **🛡️ Industrial Serial Safety & Anti-Reset Guard**: Serial initialization routines explicitly suppress DTR and RTS toggles (`ser.dtr = False`, `ser.rts = False`), eliminating hardware resets on ESP32/CH340/CP2102 chips upon port acquisition.
+* **🚀 13 TOPS Edge AI Inference**: Deploys deep vision models and neural inverse kinematics via the Raspberry Pi 5 and Hailo-8L M.2 AI HAT, reducing inference latencies to under 2 ms.
+* **🦾 Dual-Shoulder Parallel Torque Architecture**: Joint 2 (Shoulder) is driven by two mirrored ST3215 servos (IDs 12 and 13) coupled mechanically in parallel. The firmware applies complementary phase inversion (`ID13_steps = 4096 - ID12_steps`), doubling shoulder payload capacity and preventing joint backlash under cantilever loads.
+* **📐 Dual Kinematics Engine**:
+  * **Analytical Geometric IK**: Closed-form mathematical solution utilizing planar Law of Cosines for boundary-checked, deterministic Cartesian-to-Joint mapping.
+  * **Data-Driven Neural Network IK**: Multi-Layer Perceptron (MLP) network trained on physical workcell poses (`train_onnx_v2.py`) exported to optimized ONNX computational graphs (`ik_model_v2.onnx`).
+* **🎯 Precision Computer Vision Pipeline**:
+  * Interactive Click-to-Teach HSV color calibration (`color_detect_rr.py`, `smart_random_sorter.py`).
+  * Oriented bounding box extraction (`cv2.minAreaRect`) computing centroid $(x, y)$, width, height, and grasp alignment angle $(\theta)$.
+  * Multi-zone scan gates and multi-class dynamic bin sorting (Channels 1, 2, 3 $\rightarrow$ Bins 1, 2, 3).
+* **🎓 Kinesthetic Lead-Through Teaching Mode**: De-energizes servo holding torque dynamically (`rec_replay.py`), enabling an operator to physically hand-guide the 6-DOF arm through complex trajectories, capture waypoints, and replay them with fine-tuned motor speeds and inter-waypoint delays.
+* **✋ Contactless MediaPipe Gesture Teleoperation**: Integrated WebSocket client (`mec_ges.py`) tracking 21 3D hand landmarks via Google MediaPipe Hands to teleoperate the arm and robotic base over low-latency wireless networks.
+* **🛡️ Industrial Serial Safety & Anti-Reset Guard**: Serial initialization routines explicitly suppress DTR and RTS toggles (`ser.dtr = False`, `ser.rts = False`), eliminating hardware resets on ESP32/CH340/CP2102 chips upon port acquisition.
+
+---
+
+## 📐 Kinematic Specifications & Link Geometry
+
+![6-DOF Kinematic Model & Link Geometry](assets/kinematics_diagram.png)
+
+The robotic arm operates under an articulated 5-axis plus end-effector kinematic model:
+
+$$\vec{P}_{\text{wrist}} = \begin{bmatrix} X \\ Y \\ Z - L_{\text{base}} \end{bmatrix} - L_{\text{pitch}} \begin{bmatrix} \cos(\theta_{\text{base}}) \\ \sin(\theta_{\text{base}}) \\ 0 \end{bmatrix}$$
+
+### Denavit-Hartenberg (DH) Parameter Table
+
+| Link $i$ | Joint Angle $\theta_i$ | Link Offset $d_i$ (m) | Link Length $a_i$ (m) | Link Twist $\alpha_i$ (rad) | Home Offset (deg) |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| **1 (Base)** | $q_1$ | $0.100$ | $0.000$ | $+\pi/2$ | $0.0^\circ$ |
+| **2 (Shoulder)** | $q_2$ | $0.000$ | $0.245$ | $0.000$ | $0.0^\circ$ |
+| **3 (Elbow)** | $q_3$ | $0.000$ | $0.145$ | $0.000$ | $+180.0^\circ$ |
+| **4 (Wrist Pitch)** | $q_4$ | $0.000$ | $0.155$ | $-\pi/2$ | $+90.0^\circ$ |
+| **5 (Wrist Roll)** | $q_5$ | $0.000$ | $0.000$ | $0.000$ | $0.0^\circ$ |
+
+---
+
+## 🔌 Hardware Pinout & Wiring Architecture
+
+![Hardware Electrical Wiring & Pinout Architecture](assets/hardware_wiring.png)
+
+### Signal & Electrical Mapping
+
+| Source Component | Source Pin / Header | Target Component | Target Pin / Header | Protocol / Signal Type |
+| :--- | :--- | :--- | :--- | :--- |
+| **Raspberry Pi 5** | USB 3.0 Type-A | **ESP32 Bridge** | USB Type-C / Micro-B | USB CDC Serial (115200 Baud) |
+| **Raspberry Pi 5** | USB 2.0 Type-A | **USB Web Camera** | USB Cable | UVC Video Stream |
+| **RPi 5 PCIe Slot** | 16-Pin FPC Ribbon | **Hailo-8L HAT** | M.2 Key-M Slot | PCIe Gen 2 / 3 x1 Line |
+| **ESP32 Board** | GPIO 17 (TX2) | **74HC126 / Transceiver** | Data Input (DI) | Half-Duplex TTL Logic |
+| **ESP32 Board** | GPIO 16 (RX2) | **74HC126 / Transceiver** | Data Output (RO) | Half-Duplex TTL Logic |
+| **Servo Driver Bus** | 3-Pin JST Header | **ST3215 Servo #11..17** | 3-Pin Input Port | Bidirectional Half-Duplex Serial |
+| **12V DC Supply (+)** | Positive Rail (Red) | **ST3215 Bus Power** | VCC Pin (Pin 1) | 12.0V DC (Up to 10A peak) |
+| **12V DC Supply (-)** | Return Rail (Black) | **ST3215 Bus Ground** | GND Pin (Pin 2) | Common Logic & Motor Ground |
 
 ---
 
@@ -149,84 +114,13 @@ The system executes a deterministic 6-stage autonomous manipulation pipeline:
 | Category | Component | Description / Specifications | Interface / Protocol | Qty |
 | :--- | :--- | :--- | :--- | :---: |
 | **Compute** | Raspberry Pi 5 | Quad-Core ARM Cortex-A76 @ 2.4GHz, 8GB LPDDR4X | PCIe Gen 2/3, USB 3.0, Ethernet | 1 |
-| **AI Co-Processor**| Hailo-8L M.2 HAT | 13 TOPS INT8 Edge AI Neural Network Accelerator | PCIe via RPi 5 M.2 HAT+ | 1 |
-| **Microcontroller**| ESP32 Dev Module | Dual-Core Tensilica Xtensa 32-bit LX6 @ 240MHz | USB-UART (115200) / TTL Bus (1M) | 1 |
-| **Actuators** | Waveshare ST3215 | High-Torque Serial Bus Servo (30 kg.cm @ 12V, 12-bit magnetic encoder) | Half-Duplex Asynchronous Serial | 7 |
+| **AI Co-Processor** | Hailo-8L M.2 HAT | 13 TOPS INT8 Edge AI Neural Network Accelerator | PCIe via RPi 5 M.2 HAT+ | 1 |
+| **Microcontroller** | ESP32 Dev Module | Dual-Core Tensilica Xtensa 32-bit LX6 @ 240MHz | USB-UART (115200) / TTL Bus (1M) | 1 |
+| **Actuators** | Waveshare ST3215 | High-Torque Serial Bus Servo (30 kg·cm @ 12V, 12-bit magnetic encoder) | Half-Duplex Asynchronous Serial | 7 |
 | **Optics** | USB HD Web Camera | 1080p / 720p 60/30 FPS Wide-Angle CMOS Camera | USB 2.0 (UVC Standard) | 1 |
-| **Power Supply** | 12V DC SMPS Adapter| 12V DC, 8A–10A Regulated Switching Power Supply | 5.5x2.1mm DC Barrel Jack | 1 |
+| **Power Supply** | 12V DC SMPS Adapter | 12V DC, 8A–10A Regulated Switching Power Supply | 5.5×2.1mm DC Barrel Jack | 1 |
 | **Chassis** | 6-DOF Aluminum Arm | High-rigidity CNC Aluminum alloy structural links + parallel gripper | Mechanical Mounting Hardware | 1 |
 | **Wiring** | Bus Harnesses | 3-Pin JST-XH (VCC, GND, DATA) Serial Daisy-Chain Cables | 2.54mm Pitch | 1 Set |
-
----
-
-## 📐 Kinematic Specifications & Link Dimensions
-
-The robotic arm operates under an articulated 5-axis plus end-effector kinematic model:
-
-$$\vec{P}_{\text{wrist}} = \begin{bmatrix} X \\ Y \\ Z - L_{\text{base}} \end{bmatrix} - L_{\text{pitch}} \begin{bmatrix} \cos(\theta_{\text{base}}) \\ \sin(\theta_{\text{base}}) \\ 0 \end{bmatrix}$$
-
-```
-                [ID 17: Gripper]
-                       |
-               [ID 16: Wrist Roll]
-                       |   L_PITCH = 155 mm
-               [ID 15: Wrist Pitch]
-                       |
-                       o (Wrist Joint)
-                      /
-                     /  L_ELBOW = 145 mm
-                    /
-                   o (Elbow Joint: ID 14)
-                  /
-                 /  L_SHOULDER = 245 mm
-                /
-               o (Shoulder Joint: IDs 12 & 13 Parallel)
-               |
-               |  L_BASE = 100 mm
-               |
-          [ID 11: Base Yaw]
-        =====================
-         [ Workcell Ground ]
-```
-
-### Denavit-Hartenberg (DH) Parameter Table
-
-| Link $i$ | Joint Angle $\theta_i$ | Link Offset $d_i$ (m) | Link Length $a_i$ (m) | Link Twist $\alpha_i$ (rad) | Home Offset (deg) |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| **1 (Base)** | $q_1$ | $0.100$ | $0$ | $+\pi/2$ | $0.0^\circ$ |
-| **2 (Shoulder)** | $q_2$ | $0$ | $0.245$ | $0$ | $0.0^\circ$ |
-| **3 (Elbow)** | $q_3$ | $0$ | $0.145$ | $0$ | $+180.0^\circ$ |
-| **4 (Wrist Pitch)** | $q_4$ | $0$ | $0.155$ | $-\pi/2$ | $+90.0^\circ$ |
-| **5 (Wrist Roll)** | $q_5$ | $0$ | $0$ | $0$ | $0.0^\circ$ |
-
----
-
-## 🔌 Hardware Pinout & Wiring Architecture
-
-```
-+-------------------+           +-----------------------+           +-----------------------+
-|  Raspberry Pi 5   |           |  ESP32 Driver Board   |           | 7x ST3215 Servo Bus   |
-|                   |  USB Bus  |                       | Half-Duplex|                      |
-| [USB Port A/B]  =================> [MicroUSB / USB-C] | TTL Bus   | [VCC] <== +12V SMPS  |
-|                   | (115200)  |  TX2 (GPIO 17)        |===========> [GND] <== PSU Common |
-|                   |           |  RX2 (GPIO 16)        |           | [DATA] <== ESP32 TTL  |
-+-------------------+           +-----------+-----------+           +-----------------------+
-                                            |
-                                  [Common System GND]
-```
-
-### Signal & Electrical Mapping
-
-| Source Component | Source Pin / Header | Target Component | Target Pin / Header | Protocol / Signal Type |
-| :--- | :--- | :--- | :--- | :--- |
-| **Raspberry Pi 5** | USB 3.0 Type-A | **ESP32 Bridge** | USB Type-C / Micro-B | USB CDC Serial (115200 Baud) |
-| **Raspberry Pi 5** | USB 2.0 Type-A | **USB Web Camera** | USB Cable | UVC Video Stream |
-| **RPi 5 PCIe Slot**| 16-Pin FPC Ribbon | **Hailo-8L HAT** | M.2 Key-M Slot | PCIe Gen 2 / 3 x1 Line |
-| **ESP32 Board** | GPIO 17 (TX2) | **74HC126 / Transceiver**| Data Input (DI) | Half-Duplex TTL Logic |
-| **ESP32 Board** | GPIO 16 (RX2) | **74HC126 / Transceiver**| Data Output (RO) | Half-Duplex TTL Logic |
-| **Servo Driver Bus**| 3-Pin JST Header | **ST3215 Servo #11..17**| 3-Pin Input Port | Bidirectional Half-Duplex Serial |
-| **12V DC Supply (+)**| Positive Rail (Red)| **ST3215 Bus Power** | VCC Pin (Pin 1) | 12.0V DC (Up to 10A peak) |
-| **12V DC Supply (-)**| Return Rail (Black)| **ST3215 Bus Ground**| GND Pin (Pin 2) | Common Logic & Motor Ground |
 
 ---
 
@@ -236,9 +130,9 @@ Communication with each servo occurs over a single-wire half-duplex UART bus at 
 
 ### Packet Frame Structure
 
-$$\text{Packet} = \big[ \text{0xFF}, \text{0xFF}, \text{ID}, \text{Length}, \text{Instruction}, \text{Parameters}\dots, \text{Checksum} \big]$$
+$$\text{Packet} = \big[ \texttt{0xFF}, \texttt{0xFF}, \text{ID}, \text{Length}, \text{Instruction}, \text{Address}, \text{Data}\dots, \text{Checksum} \big]$$
 
-$$\text{Checksum} = \sim\left( \sum (\text{ID} + \text{Length} + \text{Instruction} + \text{Parameters}) \right) \ \& \ \text{0xFF}$$
+$$\text{Checksum} = \sim\left( \sum (\text{ID} + \text{Length} + \text{Instruction} + \text{Address} + \text{Data}) \right) \ \& \ \texttt{0xFF}$$
 
 ### Primary Control Registers
 
@@ -256,7 +150,11 @@ $$\text{Checksum} = \sim\left( \sum (\text{ID} + \text{Length} + \text{Instructi
 ```
 ST-RobotArm/
 ├── assets/
-│   ├── banner.png                  # High-tech repository banner image
+│   ├── banner.png                  # High-tech repository banner visual
+│   ├── system_architecture.png     # Full system architecture & dataflow diagram (PNG)
+│   ├── manipulation_lifecycle.png  # End-to-end 6-stage autonomous lifecycle diagram (PNG)
+│   ├── kinematics_diagram.png      # 6-DOF link geometry & DH parameter diagram (PNG)
+│   ├── hardware_wiring.png         # Hardware electrical wiring & pinout map (PNG)
 │   ├── photos/                     # Physical hardware and workcell photo showcase
 │   │   └── .gitkeep
 │   └── videos/                     # Pick-and-place & gesture control demonstration clips
@@ -264,7 +162,7 @@ ST-RobotArm/
 ├── Data_CO_Rec_Robo/
 │   ├── drl_co_data_rec.py          # Vision-guided multi-color tracking & joint data collector
 │   └── robot_home.csv              # Workcell zero/home coordinate calibration
-├── Not_Req/                        # Deprecated / experimental kinematics & test files
+├── Not_Req/                        # Experimental kinematics & archive files
 │   ├── geo_ik.py
 │   ├── gui_ijc.py
 │   ├── kine_bwd.py
@@ -301,7 +199,7 @@ ST-RobotArm/
 │   └── test6.py                    # Bi-directional read-after-write closed-loop position test
 ├── .gitignore                      # Git exclusion rules for build, binaries & caches
 ├── LICENSE                         # MIT Open-Source License
-├── README.md                       # High-tech keyword-driven engineering documentation
+├── README.md                       # High-tech engineering documentation
 ├── robot_home.csv                  # Global calibrated safe home joint configuration
 └── robot_home_pose.csv             # Global resting pose coordinates
 ```
@@ -313,7 +211,7 @@ ST-RobotArm/
 ### 1. Embedded Hardware & Microcontroller (ESP32)
 
 1. Connect the **ESP32 Serial Motor Driver Board** to your PC or Raspberry Pi via USB.
-2. Verify that the ESP32 is flashed with the transparent UART-to-Half-Duplex bridge firmware (configured for 115200 baud host rate).
+2. Verify that the ESP32 is flashed with the transparent UART-to-Half-Duplex bridge firmware (configured for 115,200 baud host rate).
 3. Connect the 12V DC power adapter to the driver power terminals.
 4. Run the hardware ping diagnostic to confirm all 7 bus servos are responding:
    ```bash
@@ -423,14 +321,14 @@ python mec_ges.py
 ## 🖼️ Media Showcases
 
 ### Physical Hardware & Workcell
-Place high-resolution photographs of the physical robotic workcell, camera mount, and ESP32 driver in `assets/photos/`.
+High-resolution photographs of the physical robotic workcell, camera mount, and ESP32 driver:
 
 | Workcell Overhead Setup | 6-DOF Robotic Arm & ST3215 Servos |
 | :---: | :---: |
 | ![Workcell Setup](assets/photos/workcell_setup.jpg) | ![Arm Structure](assets/photos/arm_structure.jpg) |
 
 ### Autonomous Manipulation in Action
-Demonstrations of real-time perception, neural inverse kinematics, and sorting operations are located in `assets/videos/`.
+Demonstrations of real-time perception, neural inverse kinematics, and sorting operations:
 
 | Autonomous Pick & Place Demo | Kinesthetic Lead-Through Teaching |
 | :---: | :---: |
@@ -471,6 +369,7 @@ python tests/test6.py
 - [x] PyTorch to ONNX Neural Inverse Kinematics surrogate pipeline.
 - [x] Kinesthetic lead-through teaching with zero-torque mode.
 - [x] Computer vision multi-class color segmentation and oriented bounding box extraction.
+- [x] High-resolution PNG system architecture and hardware wiring diagrams with 100% solid lines.
 - [ ] **Hailo-8L Native HEF Deployment**: Compile YOLOv8 / YOLOv11 nano/small models to Hailo Executable Format (`.hef`) for 100+ FPS object detection on RPi 5.
 - [ ] **ROS2 Humble Integration**: Full `ros2_control` hardware abstraction layer with URDF model and MoveIt 2 motion planning.
 - [ ] **RGB-D Depth Camera Fusion**: Integration with Intel RealSense D435 / Luxonis OAK-D for 6D object pose estimation ($X, Y, Z, \text{Roll}, \text{Pitch}, \text{Yaw}$).
